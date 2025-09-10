@@ -1,2 +1,7 @@
-transformers
-torch
+gradio==4.44.0
+requests>=2.32.0
+transformers>=4.41.0
+torch>=2.2.0
+sentence-transformers>=2.6.0
+faiss-cpu>=1.7.4      # or chromadb if you prefer
+tqdm

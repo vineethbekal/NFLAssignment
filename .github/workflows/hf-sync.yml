@@ -17,3 +17,5 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HUGGINGFACETOKEN }}
         run: git push --force https://Beks1401:$HF_TOKEN@huggingface.co/spaces/Beks1401/CSDS553_case_study_1_2025 HEAD:main
+env:
+  SPORTS_DATA_API_KEY: ${{ secrets.SPORTS_DATA_API_KEY }}

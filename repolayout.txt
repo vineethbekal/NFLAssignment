@@ -1,0 +1,6 @@
+.
+├─ app.py                 # Gradio UI + orchestration
+├─ rag_utils.py           # tiny embed + retrieve + summarize helpers
+├─ requirements.txt
+├─ README.md
+├─ .github/workflows/push-to-space.yml  # from Part A

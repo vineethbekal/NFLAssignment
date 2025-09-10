@@ -1,131 +1,81 @@
-import gradio as gr
-from huggingface_hub import InferenceClient
-import os
+# app.py
+import os, re, time, json, requests, gradio as gr
+from rag_utils import RAG
 
-pipe = None
-stop_inference = False
+SPORTS_KEY = os.environ["SPORTS_DATA_API_KEY"]
+BASE = "https://api.sportsdata.io/v3/nfl/scores/json"
+HEADERS = {"Ocp-Apim-Subscription-Key": SPORTS_KEY}  # documented header
 
-# Fancy styling
-fancy_css = """
-#main-container {
-    background-color: #f0f0f0;
-    font-family: 'Arial', sans-serif;
-}
-.gradio-container {
-    max-width: 700px;
-    margin: 0 auto;
-    padding: 20px;
-    background: white;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-    border-radius: 10px;
-}
-.gr-button {
-    background-color: #4CAF50;
-    color: white;
-    border: none;
-    border-radius: 5px;
-    padding: 10px 20px;
-    cursor: pointer;
-    transition: background-color 0.3s ease;
-}
-.gr-button:hover {
-    background-color: #45a049;
-}
-.gr-slider input {
-    color: #4CAF50;
-}
-.gr-chat {
-    font-size: 16px;
-}
-#title {
-    text-align: center;
-    font-size: 2em;
-    margin-bottom: 20px;
-    color: #333;
-}
-"""
+# 1) Helper: fetch all players once & cache (fallback for name search)
+PLAYERS_CACHE = "/tmp/players.json"
 
-def respond(
-    message,
-    history: list[dict[str, str]],
-    system_message,
-    max_tokens,
-    temperature,
-    top_p,
-    hf_token: gr.OAuthToken,
-    use_local_model: bool,
-):
-    global pipe
+def load_players():
+    if os.path.exists(PLAYERS_CACHE) and (time.time()-os.path.getmtime(PLAYERS_CACHE) < 86400):
+        return json.load(open(PLAYERS_CACHE))
+    # Pull active players (small enough for demo). You can also hit roster-by-team and combine.
+    url = f"{BASE}/Players"
+    players = requests.get(url, headers=HEADERS, timeout=30).json()
+    json.dump(players, open(PLAYERS_CACHE, "w"))
+    return players
 
-    # Build messages from history
-    messages = [{"role": "system", "content": system_message}]
-    messages.extend(history)
-    messages.append({"role": "user", "content": message})
+PLAYERS = load_players()
 
-    response = ""
+def find_player_id(name: str):
+    name_norm = re.sub(r"[^a-z ]", "", name.lower()).strip()
+    best = None
+    for p in PLAYERS:
+        full = f"{p.get('FirstName','')} {p.get('LastName','')}".strip().lower()
+        if name_norm in full:
+            best = p
+            break
+    return (best or {}), (best or {}).get("PlayerID")
 
-    if use_local_model:
-        print("[MODE] local")
-        from transformers import pipeline
-        import torch
-        if pipe is None:
-            pipe = pipeline("text-generation", model="microsoft/Phi-3-mini-4k-instruct")
+def fetch_player_news(player, pid, team_fallback=True, limit=10):
+    items = []
+    # Preferred: player-specific news if plan supports it
+    if pid:
+        url_pid = f"{BASE}/NewsByPlayerID/{pid}"
+        resp = requests.get(url_pid, headers=HEADERS, timeout=30)
+        if resp.status_code == 200:
+            items = resp.json()
+    # Fallback: team news
+    if not items and team_fallback and player.get("Team"):
+        url_team = f"{BASE}/NewsByTeam/{player['Team']}"
+        resp = requests.get(url_team, headers=HEADERS, timeout=30)
+        if resp.status_code == 200:
+            items = resp.json()
+    # Massage into (title, content, source, updated)
+    docs = []
+    for art in (items or [])[:limit]:
+        text = f"{art.get('Title','')}\n\n{art.get('Content','')}"
+        docs.append({
+            "title": art.get("Title",""),
+            "content": text,
+            "source": art.get("Source",""),
+            "updated": art.get("Updated","")
+        })
+    return docs
 
-        # Build prompt as plain text
-        prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
+RAG_ENGINE = RAG()
 
-        outputs = pipe(
-            prompt,
-            max_new_tokens=max_tokens,
-            do_sample=True,
-            temperature=temperature,
-            top_p=top_p,
-        )
+def pipeline(player_name):
+    player, pid = find_player_id(player_name)
+    if not pid and not player:
+        return f"Couldn’t find a player matching “{player_name}”. Try full name or a team hint."
+    docs = fetch_player_news(player, pid)
+    if not docs:
+        return f"No recent articles found for {player.get('FirstName','')} {player.get('LastName','')}."
+    summary, refs = RAG_ENGINE.summarize(docs)
+    header = f"{player.get('FirstName','')} {player.get('LastName','')} ({player.get('Team','')}, {player.get('Position','')})"
+    bullets = "\n".join([f"• {d['title']} — {d['source']} ({d['updated']})" for d in refs])
+    return f"{header}\n\n{summary}\n\nSources:\n{bullets}"
 
-        response = outputs[0]["generated_text"][len(prompt):]
-        yield response.strip()
-
-    else:
-        print("[MODE] api")
-
-        if hf_token is None or not getattr(hf_token, "token", None):
-            yield "⚠️ Please log in with your Hugging Face account first."
-            return
-
-        client = InferenceClient(token=hf_token.token, model="openai/gpt-oss-20b")
-
-        for chunk in client.chat_completion(
-            messages,
-            max_tokens=max_tokens,
-            stream=True,
-            temperature=temperature,
-            top_p=top_p,
-        ):
-            choices = chunk.choices
-            token = ""
-            if len(choices) and choices[0].delta.content:
-                token = choices[0].delta.content
-            response += token
-            yield response
-
-
-chatbot = gr.ChatInterface(
-    fn=respond,
-    additional_inputs=[
-        gr.Textbox(value="You are a friendly Chatbot.", label="System message"),
-        gr.Slider(minimum=1, maximum=2048, value=512, step=1, label="Max new tokens"),
-        gr.Slider(minimum=0.1, maximum=2.0, value=0.7, step=0.1, label="Temperature"),
-        gr.Slider(minimum=0.1, maximum=1.0, value=0.95, step=0.05, label="Top-p (nucleus sampling)"),
-        gr.Checkbox(label="Use Local Model", value=False),
-    ],
-    type="messages",
-)
-
-with gr.Blocks(css=fancy_css) as demo:
-    with gr.Row():
-        gr.Markdown("<h1 style='text-align: center;'>🌟 Fancy AI Chatbot 🌟</h1>")
-        gr.LoginButton()
-    chatbot.render()
+with gr.Blocks() as demo:
+    gr.Markdown("# NFL Chatbot — Player Updates")
+    name = gr.Textbox(label="Player name", placeholder="e.g., Patrick Mahomes")
+    out = gr.Textbox(label="Summary", lines=14)
+    btn = gr.Button("Get latest")
+    btn.click(fn=pipeline, inputs=name, outputs=out)
 
 if __name__ == "__main__":
     demo.launch()

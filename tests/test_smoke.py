@@ -7,7 +7,7 @@ class Token:
     def __init__(self, token): self.token = token
 
 def test_api_requires_token():
-    hf_token = os.environ.get("HF_TOKEN")
+    hf_token = os.environ.get("HUGGINGFACETOKEN")
     assert hf_token, "HF_TOKEN not set in environment"
 
     gen = app.respond(
