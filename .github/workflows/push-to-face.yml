@@ -2,14 +2,20 @@ name: Sync to Hugging Face Space
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
+
 jobs:
-  sync:
+  sync-to-hub:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Push to Space
-        uses: huggingface/hub-action@v3
         with:
-          repo-token: ${{ secrets.HUGGINGFACETOKEN }}
-          repo-id: Beks1401/CSDS553_case_study_1_2025
-          repo-type: space
+          fetch-depth: 0
+          lfs: true     
+      - name: Push to HF Space
+        env:
+          HF_TOKEN: ${{ secrets.HUGGINGFACETOKEN }}
+        run: |
+          HF_USERNAME="Beks1401"
+          SPACE_NAME="CSDS553_case_study_1_2025"
+          git push https://$HF_USERNAME:$HF_TOKEN@huggingface.co/spaces/$HF_USERNAME/$SPACE_NAME main
