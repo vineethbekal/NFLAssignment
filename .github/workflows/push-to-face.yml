@@ -10,6 +10,6 @@ jobs:
       - name: Push to Space
         uses: huggingface/hub-action@v3
         with:
-          repo-token: ${{ secrets.HF_TOKEN }}
+          repo-token: ${{ secrets.HUGGINGFACETOKEN }}
           repo-id: Beks1401/CSDS553_case_study_1_2025
           repo-type: space
